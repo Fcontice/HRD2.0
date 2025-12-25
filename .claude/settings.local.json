@@ -1,6 +1,26 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(npm run prisma:migrate:*)",
+      "Bash(node test-db.js:*)",
+      "Bash(npx prisma db push:*)",
+      "Bash(npm run prisma:generate:*)",
+      "Bash(npm run dev:*)",
+      "Bash(npm run prisma:push:*)",
+      "Bash(npm install:*)",
+      "Bash(npm run migrate:*)",
+      "Bash(npm run seed:players:*)",
+      "Bash(tsx src/scripts/debugScraper.ts:*)",
+      "Bash(npx tsx:*)",
+      "Bash(npm run import:players:*)",
+      "Bash(curl:*)",
+      "Bash(npm run migrate:v2:sql:*)",
+      "Bash(node -e:*)",
+      "Bash(npm run migrate:v2:data:*)"
+    ]
+  },
+  "enableAllProjectMcpServers": true,
   "enabledMcpjsonServers": [
     "supabase"
-  ],
-  "enableAllProjectMcpServers": true
+  ]
 }

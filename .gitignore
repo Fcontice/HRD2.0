@@ -39,3 +39,9 @@ lerna-debug.log*
 
 # OS
 Thumbs.db
+
+.claude
+
+# Project files
+*.md
+*.txt

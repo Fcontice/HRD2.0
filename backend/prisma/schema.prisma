@@ -1,14 +1,202 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
+// Prisma schema for Home Run Derby 2.0
+// Based on PROJECT_CONTEXT.md data model
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")      // Supabase pooled connection
 }
 
-// Schema will be defined based on PROJECT_CONTEXT.md requirements
-// Users, Teams, Players, TeamPlayers, PlayerStats, Leaderboards, Notifications
+// ==================== ENUMS ====================
+
+enum AuthProvider {
+  email
+  google
+}
+
+enum UserRole {
+  user
+  admin
+}
+
+enum PaymentStatus {
+  draft
+  pending
+  paid
+  rejected
+  refunded
+}
+
+enum EntryStatus {
+  draft
+  entered
+  locked
+}
+
+enum LeaderboardType {
+  overall
+  monthly
+  allstar
+}
+
+enum NotificationType {
+  email
+  in_app
+}
+
+// ==================== MODELS ====================
+
+model User {
+  id              String        @id @default(uuid())
+  email           String        @unique
+  username        String        @unique
+  passwordHash    String?       // Nullable for Google OAuth users
+  authProvider    AuthProvider  @default(email)
+  emailVerified   Boolean       @default(false)
+  role            UserRole      @default(user)
+  avatarUrl       String?
+
+  // Email verification
+  verificationToken String?
+  verificationTokenExpiry DateTime?
+
+  // Password reset
+  resetToken      String?
+  resetTokenExpiry DateTime?
+
+  // Timestamps
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  deletedAt       DateTime?     // Soft delete
+
+  // Relations
+  teams           Team[]
+  notifications   Notification[]
+
+  @@index([email])
+  @@index([username])
+}
+
+model Team {
+  id              String         @id @default(uuid())
+  userId          String
+  name            String         // Max 50 chars, validated in application
+  seasonYear      Int            // e.g., 2025
+  paymentStatus   PaymentStatus  @default(draft)
+  stripePaymentId String?
+  entryStatus     EntryStatus    @default(draft)
+  totalHrs2024    Int            @default(0) // Cached for validation (combined 2024 HRs)
+
+  // Timestamps
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  lockedAt        DateTime?
+  deletedAt       DateTime?      // Soft delete
+
+  // Relations
+  user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  teamPlayers     TeamPlayer[]
+  leaderboards    Leaderboard[]
+
+  @@index([userId])
+  @@index([entryStatus])
+  @@index([seasonYear])
+}
+
+model Player {
+  id                  String         @id @default(uuid())
+  mlbId               String         @unique // From Baseball Reference
+  name                String
+  teamAbbr            String         // e.g., NYY, LAD
+  seasonYear          Int
+  hrsPreviousSeason   Int            // e.g., 2024 HRs for 2025 season
+  isEligible          Boolean        @default(true) // ≥10 HRs
+  photoUrl            String?
+
+  // Timestamps
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+
+  // Relations
+  teamPlayers         TeamPlayer[]
+  playerStats         PlayerStats[]
+
+  @@index([seasonYear])
+  @@index([isEligible])
+}
+
+model TeamPlayer {
+  id         String   @id @default(uuid())
+  teamId     String
+  playerId   String
+  position   Int      // 1-8, for display ordering
+
+  createdAt  DateTime @default(now())
+
+  // Relations
+  team       Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  player     Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@unique([teamId, playerId]) // Prevent duplicate players on same team
+  @@index([teamId])
+  @@index([playerId])
+}
+
+model PlayerStats {
+  id                String   @id @default(uuid())
+  playerId          String
+  seasonYear        Int
+  date              DateTime @db.Date
+  hrsTotal          Int      @default(0) // Cumulative HRs
+  hrsRegularSeason  Int      @default(0)
+  hrsPostseason     Int      @default(0)
+
+  lastUpdated       DateTime @updatedAt
+
+  // Relations
+  player            Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@unique([playerId, seasonYear, date]) // One record per player per day
+  @@index([playerId])
+  @@index([seasonYear])
+  @@index([date])
+}
+
+model Leaderboard {
+  id               String          @id @default(uuid())
+  teamId           String
+  leaderboardType  LeaderboardType
+  month            Int?            // 1-12, for monthly leaderboards
+  rank             Int
+  totalHrs         Int             // Best 7 of 8 players
+
+  calculatedAt     DateTime        @default(now())
+
+  // Relations
+  team             Team            @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@unique([teamId, leaderboardType, month]) // One entry per team per leaderboard
+  @@index([leaderboardType])
+  @@index([rank])
+  @@index([month])
+}
+
+model Notification {
+  id        String            @id @default(uuid())
+  userId    String?           // Nullable for broadcast messages
+  type      NotificationType
+  subject   String
+  body      String            @db.Text
+
+  sentAt    DateTime          @default(now())
+  readAt    DateTime?
+
+  // Relations
+  user      User?             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([sentAt])
+}

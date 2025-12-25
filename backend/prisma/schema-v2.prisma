@@ -1,0 +1,249 @@
+// Prisma schema for Home Run Derby 2.0 - V2 (Cumulative Archive Design)
+// Migration from snapshot-based to multi-year tracking
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")      // Supabase pooled connection
+}
+
+// ==================== ENUMS ====================
+
+enum AuthProvider {
+  email
+  google
+}
+
+enum UserRole {
+  user
+  admin
+}
+
+enum PaymentStatus {
+  draft
+  pending
+  paid
+  rejected
+  refunded
+}
+
+enum EntryStatus {
+  draft
+  entered
+  locked
+}
+
+enum LeaderboardType {
+  overall
+  monthly
+  allstar
+}
+
+enum NotificationType {
+  email
+  in_app
+}
+
+// ==================== MODELS ====================
+
+model User {
+  id              String        @id @default(uuid())
+  email           String        @unique
+  username        String        @unique
+  passwordHash    String?       // Nullable for Google OAuth users
+  authProvider    AuthProvider  @default(email)
+  emailVerified   Boolean       @default(false)
+  role            UserRole      @default(user)
+  avatarUrl       String?
+
+  // Email verification
+  verificationToken String?
+  verificationTokenExpiry DateTime?
+
+  // Password reset
+  resetToken      String?
+  resetTokenExpiry DateTime?
+
+  // Timestamps
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  deletedAt       DateTime?     // Soft delete
+
+  // Relations
+  teams           Team[]
+  notifications   Notification[]
+
+  @@index([email])
+  @@index([username])
+}
+
+model Team {
+  id              String         @id @default(uuid())
+  userId          String
+  name            String         // Max 50 chars, validated in application
+  seasonYear      Int            // e.g., 2025
+  paymentStatus   PaymentStatus  @default(draft)
+  stripePaymentId String?
+  entryStatus     EntryStatus    @default(draft)
+  totalHrs2024    Int            @default(0) // Cached for validation (combined 2024 HRs)
+
+  // Timestamps
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  lockedAt        DateTime?
+  deletedAt       DateTime?      // Soft delete
+
+  // Relations
+  user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  teamPlayers     TeamPlayer[]
+  leaderboards    Leaderboard[]
+
+  @@index([userId])
+  @@index([entryStatus])
+  @@index([seasonYear])
+}
+
+// ==================== PLAYER MODELS (NEW DESIGN) ====================
+
+// Player: Core MLB player identity (permanent, one record per player)
+model Player {
+  id            String              @id @default(uuid())
+  mlbId         String              @unique // Baseball Reference ID (e.g., "aaron-judge")
+  name          String
+  currentTeam   String              // Current MLB team (NYY, LAD, etc.)
+  position      String?             // Position (OF, 1B, SS, etc.)
+  photoUrl      String?
+
+  // Timestamps
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+
+  // Relationships
+  seasonStats   PlayerSeasonStats[] // Historical performance by year (archived)
+  liveStats     PlayerStats[]       // Current season tracking (active)
+  teamPlayers   TeamPlayer[]        // Fantasy team selections
+
+  @@index([mlbId])
+  @@index([name])
+  @@index([currentTeam])
+}
+
+// PlayerSeasonStats: Frozen historical stats at end of each season
+// This is the "eligibility archive" - stores what happened each year
+model PlayerSeasonStats {
+  id             String   @id @default(uuid())
+  playerId       String
+  player         Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  seasonYear     Int      // The year these stats were accumulated (2024, 2025, 2026...)
+  team           String   // Team they played for that season
+  hrsTotal       Int      // Total HRs for that season
+  hrsRegular     Int      // Regular season only
+  hrsPostseason  Int      @default(0) // Playoff HRs
+  isEligible     Boolean  @default(false) // ≥10 HRs? Qualifies for NEXT year's contest
+
+  // Optional future stats
+  gamesPlayed    Int?
+  battingAvg     Float?
+  onBasePercent  Float?
+  slugging       Float?
+
+  // Timestamps
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([playerId, seasonYear]) // One record per player per season
+  @@index([playerId])
+  @@index([seasonYear])
+  @@index([isEligible])
+  @@index([seasonYear, isEligible]) // Common query: "eligible players for year X"
+  @@index([team])
+}
+
+// PlayerStats: Live in-season performance tracking (active season only)
+// This tracks daily/real-time progress during the contest
+model PlayerStats {
+  id             String   @id @default(uuid())
+  playerId       String
+  player         Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  seasonYear     Int      // Current active season (e.g., 2025)
+  date           DateTime @db.Date // Specific date of this stat snapshot
+  hrsTotal       Int      @default(0) // Running total as of this date
+  hrsRegular     Int      @default(0)
+  hrsPostseason  Int      @default(0)
+
+  lastUpdated    DateTime @updatedAt
+
+  @@unique([playerId, seasonYear, date]) // One record per player per day
+  @@index([playerId])
+  @@index([seasonYear])
+  @@index([date])
+  @@index([seasonYear, date]) // Common query: "all players on date X in season Y"
+}
+
+// ==================== OTHER MODELS (UNCHANGED) ====================
+
+model TeamPlayer {
+  id         String   @id @default(uuid())
+  teamId     String
+  playerId   String
+  position   Int      // 1-8, for display ordering
+
+  createdAt  DateTime @default(now())
+
+  // Relations
+  team       Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  player     Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@unique([teamId, playerId]) // Prevent duplicate players on same team
+  @@index([teamId])
+  @@index([playerId])
+}
+
+// Leaderboard: Enhanced with freezing capability for monthly rankings
+model Leaderboard {
+  id               String          @id @default(uuid())
+  teamId           String
+  team             Team            @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  leaderboardType  LeaderboardType
+  seasonYear       Int             // NEW: Contest year (2025, 2026...)
+  month            Int?            // 1-12 for monthly leaderboards
+
+  rank             Int
+  totalHrs         Int             // Best 7 of 8 players
+
+  isFinal          Boolean         @default(false)  // NEW: Locked at month-end?
+  calculatedAt     DateTime        @default(now())
+  finalizedAt      DateTime?       // NEW: When it was frozen
+
+  @@unique([teamId, leaderboardType, seasonYear, month]) // One entry per team per leaderboard
+  @@index([teamId])
+  @@index([leaderboardType])
+  @@index([seasonYear])
+  @@index([rank])
+  @@index([month])
+  @@index([isFinal])
+  @@index([leaderboardType, seasonYear, month]) // Common query
+}
+
+model Notification {
+  id        String            @id @default(uuid())
+  userId    String?           // Nullable for broadcast messages
+  type      NotificationType
+  subject   String
+  body      String            @db.Text
+
+  sentAt    DateTime          @default(now())
+  readAt    DateTime?
+
+  // Relations
+  user      User?             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([sentAt])
+}
