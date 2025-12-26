@@ -4,7 +4,6 @@
  */
 
 import { Request, Response, NextFunction } from 'express';
-import { PrismaClient } from '@prisma/client';
 import {
   ValidationError,
   NotFoundError,
@@ -12,8 +11,7 @@ import {
   AuthorizationError,
 } from '../utils/errors.js';
 import { createTeamSchema, updateTeamSchema } from '../types/validation.js';
-
-const prisma = new PrismaClient();
+import { db } from '../services/db.js';
 
 /**
  * POST /api/teams
@@ -35,9 +33,7 @@ export async function createTeam(req: Request, res: Response, next: NextFunction
     const userId = (req.user as any).id;
 
     // Check if user's email is verified
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-    });
+    const user = await db.user.findUnique({ id: userId });
 
     if (!user?.emailVerified) {
       throw new AuthorizationError('Email must be verified before creating a team');
@@ -55,12 +51,10 @@ export async function createTeam(req: Request, res: Response, next: NextFunction
     }
 
     // Fetch all selected players
-    const players = await prisma.player.findMany({
-      where: {
-        id: { in: playerIds },
-        seasonYear,
-        isEligible: true,
-      },
+    const players = await db.player.findMany({
+      id: { in: playerIds },
+      seasonYear,
+      isEligible: true,
     });
 
     // Validate all players exist and are eligible
@@ -78,45 +72,20 @@ export async function createTeam(req: Request, res: Response, next: NextFunction
       );
     }
 
-    // Create team and team players in a transaction
-    const team = await prisma.$transaction(async (tx) => {
-      // Create team
-      const newTeam = await tx.team.create({
-        data: {
-          userId,
-          name,
-          seasonYear,
-          totalHrs2024: totalHrs,
-          paymentStatus: 'draft',
-          entryStatus: 'draft',
-        },
-      });
-
-      // Create team-player associations
-      const teamPlayers = playerIds.map((playerId, index) => ({
-        teamId: newTeam.id,
-        playerId,
-        position: index + 1,
-      }));
-
-      await tx.teamPlayer.createMany({
-        data: teamPlayers,
-      });
-
-      // Return team with players
-      return tx.team.findUnique({
-        where: { id: newTeam.id },
-        include: {
-          teamPlayers: {
-            include: {
-              player: true,
-            },
-            orderBy: {
-              position: 'asc',
-            },
-          },
-        },
-      });
+    // Create team with team players
+    const team = await db.team.create({
+      userId,
+      name,
+      seasonYear,
+      totalHrs2024: totalHrs,
+      paymentStatus: 'draft',
+      entryStatus: 'draft',
+      teamPlayers: {
+        create: playerIds.map((playerId, index) => ({
+          playerId,
+          position: index + 1,
+        })),
+      },
     });
 
     res.status(201).json({
@@ -137,26 +106,13 @@ export async function getTeam(req: Request, res: Response, next: NextFunction) {
   try {
     const { id } = req.params;
 
-    const team = await prisma.team.findUnique({
-      where: { id },
-      include: {
-        user: {
-          select: {
-            id: true,
-            username: true,
-            avatarUrl: true,
-          },
-        },
-        teamPlayers: {
-          include: {
-            player: true,
-          },
-          orderBy: {
-            position: 'asc',
-          },
-        },
-      },
-    });
+    const team = await db.team.findUnique(
+      { id },
+      {
+        user: true,
+        teamPlayers: true,
+      }
+    );
 
     if (!team) {
       throw new NotFoundError('Team not found');
@@ -189,18 +145,7 @@ export async function getMyTeams(req: Request, res: Response, next: NextFunction
       where.seasonYear = parseInt(seasonYear as string);
     }
 
-    const teams = await prisma.team.findMany({
-      where,
-      include: {
-        teamPlayers: {
-          include: {
-            player: true,
-          },
-          orderBy: {
-            position: 'asc',
-          },
-        },
-      },
+    const teams = await db.team.findMany(where, {
       orderBy: {
         createdAt: 'desc',
       },
@@ -225,7 +170,7 @@ export async function updateTeam(req: Request, res: Response, next: NextFunction
     const userId = (req.user as any).id;
 
     // Validate request body
-    const validation = teamUpdateSchema.safeParse(req.body);
+    const validation = updateTeamSchema.safeParse(req.body);
     if (!validation.success) {
       throw new ValidationError(validation.error.errors[0].message);
     }
@@ -233,16 +178,10 @@ export async function updateTeam(req: Request, res: Response, next: NextFunction
     const { name, playerIds } = validation.data;
 
     // Fetch team
-    const team = await prisma.team.findUnique({
-      where: { id },
-      include: {
-        teamPlayers: {
-          include: {
-            player: true,
-          },
-        },
-      },
-    });
+    const team = await db.team.findUnique(
+      { id },
+      { teamPlayers: true }
+    );
 
     if (!team) {
       throw new NotFoundError('Team not found');
@@ -278,12 +217,10 @@ export async function updateTeam(req: Request, res: Response, next: NextFunction
       }
 
       // Fetch new players
-      const players = await prisma.player.findMany({
-        where: {
-          id: { in: playerIds },
-          seasonYear: team.seasonYear,
-          isEligible: true,
-        },
+      const players = await db.player.findMany({
+        id: { in: playerIds },
+        seasonYear: team.seasonYear,
+        isEligible: true,
       });
 
       if (players.length !== 8) {
@@ -300,48 +237,19 @@ export async function updateTeam(req: Request, res: Response, next: NextFunction
       }
 
       updatedData.totalHrs2024 = totalHrs;
-    }
 
-    // Update team in transaction
-    const updatedTeam = await prisma.$transaction(async (tx) => {
-      // Update team
-      const team = await tx.team.update({
-        where: { id },
-        data: updatedData,
-      });
-
-      // If updating players, delete old and create new
-      if (playerIds) {
-        await tx.teamPlayer.deleteMany({
-          where: { teamId: id },
-        });
-
-        const teamPlayers = playerIds.map((playerId, index) => ({
-          teamId: id,
+      // Add teamPlayers update
+      updatedData.teamPlayers = {
+        deleteMany: {},
+        create: playerIds.map((playerId, index) => ({
           playerId,
           position: index + 1,
-        }));
+        })),
+      };
+    }
 
-        await tx.teamPlayer.createMany({
-          data: teamPlayers,
-        });
-      }
-
-      // Return updated team with players
-      return tx.team.findUnique({
-        where: { id },
-        include: {
-          teamPlayers: {
-            include: {
-              player: true,
-            },
-            orderBy: {
-              position: 'asc',
-            },
-          },
-        },
-      });
-    });
+    // Update team
+    const updatedTeam = await db.team.update({ id }, updatedData);
 
     res.json({
       success: true,
@@ -363,9 +271,7 @@ export async function deleteTeam(req: Request, res: Response, next: NextFunction
     const userId = (req.user as any).id;
 
     // Fetch team
-    const team = await prisma.team.findUnique({
-      where: { id },
-    });
+    const team = await db.team.findUnique({ id });
 
     if (!team) {
       throw new NotFoundError('Team not found');
@@ -382,12 +288,7 @@ export async function deleteTeam(req: Request, res: Response, next: NextFunction
     }
 
     // Soft delete team
-    await prisma.team.update({
-      where: { id },
-      data: {
-        deletedAt: new Date(),
-      },
-    });
+    await db.team.delete({ id });
 
     res.json({
       success: true,

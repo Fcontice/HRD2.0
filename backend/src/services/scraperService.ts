@@ -5,9 +5,7 @@
 
 import axios from 'axios';
 import * as cheerio from 'cheerio';
-import { PrismaClient } from '@prisma/client';
-
-const prisma = new PrismaClient();
+import { db } from './db.js';
 
 export interface PlayerData {
   name: string;
@@ -93,19 +91,9 @@ export async function seedPlayersToDatabase(players: PlayerData[], seasonYear: n
   for (const player of players) {
     try {
       // Upsert player (create or update if exists)
-      const result = await prisma.player.upsert({
-        where: {
-          mlbId: player.mlbId,
-        },
-        update: {
-          name: player.name,
-          teamAbbr: player.teamAbbr,
-          hrsPreviousSeason: player.homeRuns,
-          isEligible: player.homeRuns >= 10,
-          photoUrl: player.photoUrl,
-          updatedAt: new Date(),
-        },
-        create: {
+      const result = await db.player.upsert(
+        { mlbId: player.mlbId },
+        {
           mlbId: player.mlbId,
           name: player.name,
           teamAbbr: player.teamAbbr,
@@ -114,11 +102,19 @@ export async function seedPlayersToDatabase(players: PlayerData[], seasonYear: n
           isEligible: player.homeRuns >= 10,
           photoUrl: player.photoUrl,
         },
-      });
+        {
+          name: player.name,
+          teamAbbr: player.teamAbbr,
+          hrsPreviousSeason: player.homeRuns,
+          isEligible: player.homeRuns >= 10,
+          photoUrl: player.photoUrl,
+          updatedAt: new Date(),
+        }
+      );
 
       // Check if it was a create or update
-      const existingPlayer = await prisma.player.findUnique({
-        where: { mlbId: player.mlbId },
+      const existingPlayer = await db.player.findFirst({
+        mlbId: player.mlbId,
       });
 
       if (existingPlayer && existingPlayer.createdAt.getTime() === result.createdAt.getTime()) {
@@ -166,6 +162,6 @@ export async function scrapeAndSeedPlayers(seasonYear: number = 2025): Promise<v
     console.error('\n❌ Scraping failed:', error);
     throw error;
   } finally {
-    await prisma.$disconnect();
+    await db.$disconnect();
   }
 }

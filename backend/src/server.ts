@@ -1,16 +1,16 @@
+// MUST load environment variables FIRST before any other imports
+import './env.js'
+
 import express from 'express'
 import cors from 'cors'
 import helmet from 'helmet'
 import cookieParser from 'cookie-parser'
-import dotenv from 'dotenv'
 import passport from './config/passport.js'
 import authRoutes from './routes/authRoutes.js'
 import playerRoutes from './routes/playerRoutes.js'
 import teamRoutes from './routes/teamRoutes.js'
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js'
 import rateLimit from 'express-rate-limit'
-
-dotenv.config()
 
 const app = express()
 const PORT = process.env.PORT || 5000

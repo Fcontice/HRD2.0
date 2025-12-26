@@ -1,5 +1,4 @@
 import { Request, Response } from 'express'
-import { PrismaClient } from '@prisma/client'
 import { hashPassword, comparePassword } from '../utils/password.js'
 import {
   generateAccessToken,
@@ -24,8 +23,7 @@ import {
   forgotPasswordSchema,
   resetPasswordSchema,
 } from '../types/validation.js'
-
-const prisma = new PrismaClient()
+import { db } from '../services/db.js'
 
 /**
  * Register new user with email and password
@@ -34,8 +32,8 @@ export async function register(req: Request, res: Response) {
   const { email, username, password } = registerSchema.parse(req.body)
 
   // Check if email already exists
-  const existingEmail = await prisma.user.findUnique({
-    where: { email: email.toLowerCase() },
+  const existingEmail = await db.user.findUnique({
+    email: email.toLowerCase(),
   })
 
   if (existingEmail) {
@@ -43,8 +41,8 @@ export async function register(req: Request, res: Response) {
   }
 
   // Check if username already exists
-  const existingUsername = await prisma.user.findUnique({
-    where: { username },
+  const existingUsername = await db.user.findUnique({
+    username,
   })
 
   if (existingUsername) {
@@ -59,23 +57,23 @@ export async function register(req: Request, res: Response) {
   const verificationTokenExpiry = createTokenExpiry(24)
 
   // Create user
-  const user = await prisma.user.create({
-    data: {
-      email: email.toLowerCase(),
-      username,
-      passwordHash,
-      authProvider: 'email',
-      verificationToken,
-      verificationTokenExpiry,
-    },
-    select: {
-      id: true,
-      email: true,
-      username: true,
-      role: true,
-      createdAt: true,
-    },
+  const newUser = await db.user.create({
+    email: email.toLowerCase(),
+    username,
+    passwordHash,
+    authProvider: 'email',
+    verificationToken,
+    verificationTokenExpiry,
   })
+
+  // Return only needed fields
+  const user = {
+    id: newUser.id,
+    email: newUser.email,
+    username: newUser.username,
+    role: newUser.role,
+    createdAt: newUser.createdAt,
+  }
 
   // Send verification email
   await sendVerificationEmail(user.email, user.username, verificationToken)
@@ -93,12 +91,10 @@ export async function register(req: Request, res: Response) {
 export async function verifyEmail(req: Request, res: Response) {
   const { token } = verifyEmailSchema.parse(req.body)
 
-  const user = await prisma.user.findFirst({
-    where: {
-      verificationToken: token,
-      verificationTokenExpiry: {
-        gt: new Date(),
-      },
+  const user = await db.user.findFirst({
+    verificationToken: token,
+    verificationTokenExpiry: {
+      gt: new Date(),
     },
   })
 
@@ -107,14 +103,14 @@ export async function verifyEmail(req: Request, res: Response) {
   }
 
   // Mark email as verified
-  await prisma.user.update({
-    where: { id: user.id },
-    data: {
+  await db.user.update(
+    { id: user.id },
+    {
       emailVerified: true,
       verificationToken: null,
       verificationTokenExpiry: null,
-    },
-  })
+    }
+  )
 
   res.json({
     success: true,
@@ -129,8 +125,8 @@ export async function login(req: Request, res: Response) {
   const { email, password } = loginSchema.parse(req.body)
 
   // Find user
-  const user = await prisma.user.findUnique({
-    where: { email: email.toLowerCase() },
+  const user = await db.user.findUnique({
+    email: email.toLowerCase(),
   })
 
   if (!user) {
@@ -193,8 +189,8 @@ export async function login(req: Request, res: Response) {
 export async function forgotPassword(req: Request, res: Response) {
   const { email } = forgotPasswordSchema.parse(req.body)
 
-  const user = await prisma.user.findUnique({
-    where: { email: email.toLowerCase() },
+  const user = await db.user.findUnique({
+    email: email.toLowerCase(),
   })
 
   // Don't reveal if email exists for security
@@ -217,13 +213,13 @@ export async function forgotPassword(req: Request, res: Response) {
   const resetToken = generateRandomToken()
   const resetTokenExpiry = createTokenExpiry(24)
 
-  await prisma.user.update({
-    where: { id: user.id },
-    data: {
+  await db.user.update(
+    { id: user.id },
+    {
       resetToken,
       resetTokenExpiry,
-    },
-  })
+    }
+  )
 
   // Send reset email
   await sendPasswordResetEmail(user.email, user.username, resetToken)
@@ -240,12 +236,10 @@ export async function forgotPassword(req: Request, res: Response) {
 export async function resetPassword(req: Request, res: Response) {
   const { token, password } = resetPasswordSchema.parse(req.body)
 
-  const user = await prisma.user.findFirst({
-    where: {
-      resetToken: token,
-      resetTokenExpiry: {
-        gt: new Date(),
-      },
+  const user = await db.user.findFirst({
+    resetToken: token,
+    resetTokenExpiry: {
+      gt: new Date(),
     },
   })
 
@@ -257,14 +251,14 @@ export async function resetPassword(req: Request, res: Response) {
   const passwordHash = await hashPassword(password)
 
   // Update password and clear reset token
-  await prisma.user.update({
-    where: { id: user.id },
-    data: {
+  await db.user.update(
+    { id: user.id },
+    {
       passwordHash,
       resetToken: null,
       resetTokenExpiry: null,
-    },
-  })
+    }
+  )
 
   res.json({
     success: true,
@@ -280,22 +274,24 @@ export async function getProfile(req: Request, res: Response) {
     throw new AuthenticationError()
   }
 
-  const user = await prisma.user.findUnique({
-    where: { id: req.user.userId },
-    select: {
-      id: true,
-      email: true,
-      username: true,
-      role: true,
-      avatarUrl: true,
-      authProvider: true,
-      emailVerified: true,
-      createdAt: true,
-    },
+  const foundUser = await db.user.findUnique({
+    id: req.user.userId,
   })
 
-  if (!user) {
+  if (!foundUser) {
     throw new NotFoundError('User')
+  }
+
+  // Return only needed fields
+  const user = {
+    id: foundUser.id,
+    email: foundUser.email,
+    username: foundUser.username,
+    role: foundUser.role,
+    avatarUrl: foundUser.avatarUrl,
+    authProvider: foundUser.authProvider,
+    emailVerified: foundUser.emailVerified,
+    createdAt: foundUser.createdAt,
   }
 
   res.json({

@@ -16,7 +16,13 @@
       "Bash(curl:*)",
       "Bash(npm run migrate:v2:sql:*)",
       "Bash(node -e:*)",
-      "Bash(npm run migrate:v2:data:*)"
+      "Bash(npm run migrate:v2:data:*)",
+      "Bash(node test-prisma-connection.js:*)",
+      "Bash(npx prisma migrate:*)",
+      "Bash(node check-tables.js:*)",
+      "Bash(node test-pooler-type.js:*)",
+      "Bash(del test-prisma-connection.js check-tables.js test-pooler-type.js)",
+      "Bash(node test-db-connection.js:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

@@ -2,11 +2,9 @@ import passport from 'passport'
 import { Strategy as LocalStrategy } from 'passport-local'
 import { Strategy as GoogleStrategy } from 'passport-google-oauth20'
 import { Strategy as JwtStrategy, ExtractJwt } from 'passport-jwt'
-import { PrismaClient } from '@prisma/client'
 import { comparePassword } from '../utils/password.js'
 import { JwtPayload } from '../utils/jwt.js'
-
-const prisma = new PrismaClient()
+import { db } from '../services/db.js'
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production'
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || ''
@@ -25,8 +23,8 @@ passport.use(
     async (email, password, done) => {
       try {
         // Find user by email
-        const user = await prisma.user.findUnique({
-          where: { email: email.toLowerCase() },
+        const user = await db.user.findUnique({
+          email: email.toLowerCase(),
         })
 
         if (!user) {
@@ -91,8 +89,8 @@ if (GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET) {
           }
 
           // Check if user exists
-          let user = await prisma.user.findUnique({
-            where: { email: email.toLowerCase() },
+          let user = await db.user.findUnique({
+            email: email.toLowerCase(),
           })
 
           if (user) {
@@ -103,23 +101,21 @@ if (GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET) {
 
             // Update avatar if not set
             if (!user.avatarUrl && profile.photos?.[0]?.value) {
-              user = await prisma.user.update({
-                where: { id: user.id },
-                data: { avatarUrl: profile.photos[0].value },
-              })
+              user = await db.user.update(
+                { id: user.id },
+                { avatarUrl: profile.photos[0].value }
+              )
             }
           } else {
             // Create new user
             const username = email.split('@')[0] + '_' + Date.now()
 
-            user = await prisma.user.create({
-              data: {
-                email: email.toLowerCase(),
-                username,
-                authProvider: 'google',
-                emailVerified: true, // Google emails are pre-verified
-                avatarUrl: profile.photos?.[0]?.value,
-              },
+            user = await db.user.create({
+              email: email.toLowerCase(),
+              username,
+              authProvider: 'google',
+              emailVerified: true, // Google emails are pre-verified
+              avatarUrl: profile.photos?.[0]?.value,
             })
           }
 
@@ -147,8 +143,8 @@ passport.use(
     },
     async (payload: JwtPayload, done) => {
       try {
-        const user = await prisma.user.findUnique({
-          where: { id: payload.userId },
+        const user = await db.user.findUnique({
+          id: payload.userId,
         })
 
         if (!user || user.deletedAt) {

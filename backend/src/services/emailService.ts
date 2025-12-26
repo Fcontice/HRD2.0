@@ -15,15 +15,30 @@ export interface EmailOptions {
  */
 export async function sendEmail(options: EmailOptions): Promise<void> {
   try {
-    await resend.emails.send({
+    const result = await resend.emails.send({
       from: FROM_EMAIL,
       to: options.to,
       subject: options.subject,
       html: options.html,
     })
-  } catch (error) {
-    console.error('Failed to send email:', error)
-    throw new Error('Failed to send email')
+    console.log('✅ Email sent successfully:', {
+      to: options.to,
+      subject: options.subject,
+      id: result.data?.id
+    })
+  } catch (error: any) {
+    console.error('❌ Failed to send email:', {
+      error: error.message,
+      to: options.to,
+      subject: options.subject,
+      from: FROM_EMAIL
+    })
+    // Don't throw in development to prevent blocking registration
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('Failed to send email')
+    } else {
+      console.warn('⚠️  Email sending failed but continuing (development mode)')
+    }
   }
 }
 

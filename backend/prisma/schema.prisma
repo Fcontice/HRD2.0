@@ -7,7 +7,7 @@ generator client {
 
 datasource db {
   provider  = "postgresql"
-  url       = env("DATABASE_URL")      // Supabase pooled connection
+  url       = env("DATABASE_URL")      // Supabase session mode pooling (supports migrations)
 }
 
 // ==================== ENUMS ====================

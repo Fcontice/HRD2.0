@@ -4,10 +4,8 @@
  */
 
 import { Request, Response, NextFunction } from 'express';
-import { PrismaClient } from '@prisma/client';
 import { NotFoundError, ValidationError } from '../utils/errors.js';
-
-const prisma = new PrismaClient();
+import { db } from '../services/db.js';
 
 /**
  * GET /api/players
@@ -73,13 +71,12 @@ export async function getPlayers(req: Request, res: Response, next: NextFunction
 
     // Fetch players
     const [players, totalCount] = await Promise.all([
-      prisma.player.findMany({
-        where,
+      db.player.findMany(where, {
         orderBy,
         take: parseInt(limit as string),
         skip: parseInt(offset as string),
       }),
-      prisma.player.count({ where }),
+      db.player.count(where),
     ]);
 
     res.json({
@@ -107,22 +104,10 @@ export async function getPlayerById(req: Request, res: Response, next: NextFunct
   try {
     const { id } = req.params;
 
-    const player = await prisma.player.findUnique({
-      where: { id },
-      include: {
-        teamPlayers: {
-          include: {
-            team: {
-              select: {
-                id: true,
-                name: true,
-                userId: true,
-              },
-            },
-          },
-        },
-      },
-    });
+    const player = await db.player.findUnique(
+      { id },
+      { teamPlayers: true }
+    );
 
     if (!player) {
       throw new NotFoundError('Player not found');
@@ -153,20 +138,21 @@ export async function searchPlayers(req: Request, res: Response, next: NextFunct
       throw new ValidationError('Search query (q) is required');
     }
 
-    const players = await prisma.player.findMany({
-      where: {
+    const players = await db.player.findMany(
+      {
         seasonYear: parseInt(seasonYear as string),
         isEligible: true,
         name: {
           contains: q as string,
-          mode: 'insensitive',
         },
       },
-      orderBy: {
-        hrsPreviousSeason: 'desc',
-      },
-      take: parseInt(limit as string),
-    });
+      {
+        orderBy: {
+          hrsPreviousSeason: 'desc',
+        },
+        take: parseInt(limit as string),
+      }
+    );
 
     res.json({
       success: true,
@@ -187,7 +173,7 @@ export async function getPlayerStats(req: Request, res: Response, next: NextFunc
   try {
     const { seasonYear = '2025' } = req.query;
 
-    const stats = await prisma.player.aggregate({
+    const stats = await db.player.aggregate({
       where: {
         seasonYear: parseInt(seasonYear as string),
         isEligible: true,
@@ -205,7 +191,7 @@ export async function getPlayerStats(req: Request, res: Response, next: NextFunc
     });
 
     // Get team distribution
-    const teamDistribution = await prisma.player.groupBy({
+    const teamDistribution = await db.player.groupBy({
       by: ['teamAbbr'],
       where: {
         seasonYear: parseInt(seasonYear as string),
@@ -226,7 +212,7 @@ export async function getPlayerStats(req: Request, res: Response, next: NextFunc
         averageHRs: Math.round((stats._avg.hrsPreviousSeason || 0) * 10) / 10,
         maxHRs: stats._max.hrsPreviousSeason,
         minHRs: stats._min.hrsPreviousSeason,
-        teamDistribution: teamDistribution.map(t => ({
+        teamDistribution: teamDistribution.map((t: any) => ({
           team: t.teamAbbr,
           count: t._count,
         })),
