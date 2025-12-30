@@ -16,57 +16,63 @@ export interface PlayerData {
 }
 
 /**
- * Scrape MLB player home run stats from Baseball Savant
+ * Scrape MLB player home run stats from Baseball Savant CSV export
  * Target: Players with ≥10 HRs in specified season
  */
 export async function scrapePlayerStats(seasonYear: number = 2025): Promise<PlayerData[]> {
-  const url = `https://baseballsavant.mlb.com/leaderboard/custom?year=${seasonYear}&type=batter&filter=&min=q&selections=home_run&chart=false&x=home_run&y=home_run&r=no&chartType=beeswarm&sort=home_run&sortDir=desc`;
+  // Use CSV export which is more reliable than HTML scraping
+  const url = `https://baseballsavant.mlb.com/leaderboard/custom?year=${seasonYear}&type=batter&filter=&min=q&selections=home_run&chart=false&x=home_run&y=home_run&r=no&chartType=beeswarm&sort=home_run&sortDir=desc&csv=true`;
 
   console.log(`📡 Fetching data from Baseball Savant (MLB Official)...`);
   console.log(`🔗 URL: ${url}`);
 
   try {
-    // Fetch the page
+    // Fetch CSV data
     const response = await axios.get(url, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept': 'text/csv',
       },
     });
 
-    const $ = cheerio.load(response.data);
     const players: PlayerData[] = [];
+    const csvLines = response.data.split('\n').filter((line: string) => line.trim());
 
-    // Baseball Savant uses a table with class="leaderboard-toggle"
-    // Each row contains player data
-    $('table tbody tr').each((index, element) => {
-      const $row = $(element);
+    // Skip header row
+    for (let i = 1; i < csvLines.length; i++) {
+      const line = csvLines[i];
 
-      // Extract player name from first column
-      const playerName = $row.find('td').eq(0).text().trim();
+      // Parse CSV line (format: "last_name, first_name",player_id,year,home_run)
+      const match = line.match(/"([^"]+)",(\d+),(\d+),(\d+)/);
 
-      // Extract team from second column (before comma, e.g., "NYY, AL")
-      const teamText = $row.find('td').eq(1).text().trim();
-      const teamAbbr = teamText.split(',')[0]?.trim() || '';
+      if (match) {
+        const [, fullName, playerId, year, homeRunsStr] = match;
+        const homeRuns = parseInt(homeRunsStr);
 
-      // Extract home runs - usually in the last data column
-      const homeRunsText = $row.find('td').last().text().trim();
-      const homeRuns = parseInt(homeRunsText) || 0;
+        // Parse "Last, First" format
+        const nameParts = fullName.split(',').map(s => s.trim());
+        const playerName = nameParts.length >= 2
+          ? `${nameParts[1]} ${nameParts[0]}` // "First Last"
+          : fullName;
 
-      // Generate MLB ID from name (simplified - use name as ID for now)
-      // Format: lowercase, replace spaces with hyphens
-      const mlbId = playerName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '') || `player-${index}`;
+        // Generate MLB ID from player_id
+        const mlbId = `mlb-${playerId}`;
 
-      // Only include players with valid data and ≥10 HRs
-      if (playerName && teamAbbr && homeRuns >= 10) {
-        players.push({
-          name: playerName,
-          mlbId,
-          teamAbbr,
-          homeRuns,
-        });
+        // We don't have team data in this CSV, use placeholder
+        // You may need to fetch team from another source or use a different endpoint
+        const teamAbbr = 'UNK'; // Unknown - will be updated when we have team data
+
+        // Only include players with ≥10 HRs
+        if (homeRuns >= 10) {
+          players.push({
+            name: playerName,
+            mlbId,
+            teamAbbr,
+            homeRuns,
+          });
+        }
       }
-    });
+    }
 
     console.log(`✅ Successfully scraped ${players.length} eligible players (≥10 HRs)`);
     return players;
@@ -78,8 +84,9 @@ export async function scrapePlayerStats(seasonYear: number = 2025): Promise<Play
 }
 
 /**
- * Save scraped player data to database
- * Season year determines which year's data to use for eligibility
+ * Save scraped player data to database using cumulative archive design
+ * 1. Upsert Player (permanent identity - no seasonYear)
+ * 2. Create PlayerSeasonStats record (historical archive)
  */
 export async function seedPlayersToDatabase(players: PlayerData[], seasonYear: number = 2025): Promise<void> {
   console.log(`\n💾 Saving ${players.length} players to database...`);
@@ -90,38 +97,43 @@ export async function seedPlayersToDatabase(players: PlayerData[], seasonYear: n
 
   for (const player of players) {
     try {
-      // Upsert player (create or update if exists)
-      const result = await db.player.upsert(
+      // Step 1: Upsert Player (permanent identity)
+      const playerRecord = await db.player.upsert(
         { mlbId: player.mlbId },
         {
           mlbId: player.mlbId,
           name: player.name,
           teamAbbr: player.teamAbbr,
-          seasonYear,
-          hrsPreviousSeason: player.homeRuns,
-          isEligible: player.homeRuns >= 10,
-          photoUrl: player.photoUrl,
+          photoUrl: player.photoUrl || null,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
         },
         {
-          name: player.name,
+          // Update team if player was traded
           teamAbbr: player.teamAbbr,
-          hrsPreviousSeason: player.homeRuns,
-          isEligible: player.homeRuns >= 10,
-          photoUrl: player.photoUrl,
-          updatedAt: new Date(),
+          updatedAt: new Date().toISOString(),
         }
-      );
+      )
 
-      // Check if it was a create or update
-      const existingPlayer = await db.player.findFirst({
-        mlbId: player.mlbId,
-      });
+      // Step 2: Upsert PlayerSeasonStats (historical archive)
+      await db.playerSeasonStats.upsert(
+        { playerId: playerRecord.id, seasonYear },
+        {
+          playerId: playerRecord.id,
+          seasonYear,
+          hrsTotal: player.homeRuns,
+          teamAbbr: player.teamAbbr,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        {
+          hrsTotal: player.homeRuns,
+          teamAbbr: player.teamAbbr,
+          updatedAt: new Date().toISOString(),
+        }
+      )
 
-      if (existingPlayer && existingPlayer.createdAt.getTime() === result.createdAt.getTime()) {
-        createdCount++;
-      } else {
-        updatedCount++;
-      }
+      createdCount++
 
     } catch (error) {
       console.error(`⚠️  Failed to save player ${player.name}:`, error);
@@ -130,10 +142,9 @@ export async function seedPlayersToDatabase(players: PlayerData[], seasonYear: n
   }
 
   console.log(`\n📊 Database seeding complete:`);
-  console.log(`   ✅ Created: ${createdCount}`);
-  console.log(`   🔄 Updated: ${updatedCount}`);
+  console.log(`   ✅ Players saved: ${createdCount}`);
   console.log(`   ⚠️  Skipped: ${skippedCount}`);
-  console.log(`   📈 Total: ${createdCount + updatedCount} players in database\n`);
+  console.log(`   📈 Season ${seasonYear}: ${createdCount} player records\n`);
 }
 
 /**

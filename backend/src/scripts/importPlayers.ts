@@ -1,145 +1,136 @@
 /**
- * Import Players from CSV
- * Reads CSV file and imports player data into database
+ * Import Players Cumulative Archive
+ * Imports players from multiple seasons to create a comprehensive player archive for the contest
+ * Uses live scraping from Baseball Savant (MLB Official Stats)
  */
 
-import { readFileSync } from 'fs';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
-import { PrismaClient } from '@prisma/client';
-import dotenv from 'dotenv';
+import '../env.js' // Load environment variables
+import { scrapePlayerStats, seedPlayersToDatabase } from '../services/scraperService.js'
+import { db } from '../services/db.js'
 
-dotenv.config();
+// Seasons to import for cumulative archive
+const SEASONS_TO_IMPORT = [2024, 2025]
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+async function importCumulativePlayerArchive() {
+  console.log('\n🏟️  HRD 2.0 - Cumulative Player Archive Import\n')
+  console.log('=' .repeat(60))
+  console.log(`📅 Importing seasons: ${SEASONS_TO_IMPORT.join(', ')}`)
+  console.log('=' .repeat(60) + '\n')
 
-const prisma = new PrismaClient();
-
-interface CSVPlayer {
-  name: string;
-  team: string;
-  homeRuns: number;
-}
-
-function parseCSV(csvContent: string): CSVPlayer[] {
-  const lines = csvContent.trim().split('\n');
-  const players: CSVPlayer[] = [];
-
-  // Skip header row
-  for (let i = 1; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (!line) continue;
-
-    const [name, team, homeRunsStr] = line.split(',');
-    const homeRuns = parseInt(homeRunsStr);
-
-    if (name && team && homeRuns >= 10) {
-      players.push({
-        name: name.trim(),
-        team: team.trim(),
-        homeRuns,
-      });
-    }
-  }
-
-  return players;
-}
-
-async function importPlayers() {
-  console.log('\n📥 Starting player import from CSV...\n');
+  let totalImported = 0
+  const seasonResults: { [key: number]: { count: number; topPlayer: string } } = {}
 
   try {
-    // Read CSV file
-    const csvPath = join(__dirname, '../../data/players_2025.csv');
-    const csvContent = readFileSync(csvPath, 'utf-8');
+    for (const seasonYear of SEASONS_TO_IMPORT) {
+      console.log(`\n📊 Season ${seasonYear}`)
+      console.log('-'.repeat(40))
 
-    console.log(`📄 Reading CSV file: players_2025.csv`);
-
-    // Parse CSV
-    const players = parseCSV(csvContent);
-    console.log(`✅ Parsed ${players.length} players from CSV\n`);
-
-    // Import to database
-    console.log('💾 Importing players to database...\n');
-
-    let createdCount = 0;
-    let updatedCount = 0;
-    let skippedCount = 0;
-
-    for (const player of players) {
       try {
-        // Generate mlbId from name (lowercase, hyphens)
-        const mlbId = player.name.toLowerCase()
-          .replace(/\s+/g, '-')
-          .replace(/[^a-z0-9-]/g, '')
-          .replace(/--+/g, '-');
+        // Scrape player data from Baseball Savant
+        console.log(`🔍 Scraping ${seasonYear} season data...`)
+        const players = await scrapePlayerStats(seasonYear)
 
-        // Upsert player
-        await prisma.player.upsert({
-          where: { mlbId },
-          update: {
-            name: player.name,
-            teamAbbr: player.team,
-            hrsPreviousSeason: player.homeRuns,
-            isEligible: player.homeRuns >= 10,
-            updatedAt: new Date(),
-          },
-          create: {
-            mlbId,
-            name: player.name,
-            teamAbbr: player.team,
-            seasonYear: 2025,
-            hrsPreviousSeason: player.homeRuns,
-            isEligible: player.homeRuns >= 10,
-          },
-        });
-
-        createdCount++;
-
-        // Progress indicator
-        if ((createdCount + updatedCount) % 20 === 0) {
-          console.log(`   Imported ${createdCount + updatedCount}/${players.length} players...`);
+        if (players.length === 0) {
+          console.log(`⚠️  No players found for ${seasonYear} - skipping`)
+          continue
         }
 
+        console.log(`✅ Found ${players.length} eligible players (≥10 HRs)`)
+
+        // Save to database
+        await seedPlayersToDatabase(players, seasonYear)
+
+        // Get top player for this season
+        const topPlayer = players.reduce((top, current) =>
+          current.homeRuns > top.homeRuns ? current : top
+        )
+
+        seasonResults[seasonYear] = {
+          count: players.length,
+          topPlayer: `${topPlayer.name} (${topPlayer.teamAbbr}) - ${topPlayer.homeRuns} HRs`,
+        }
+
+        totalImported += players.length
+
+        console.log(`✅ Season ${seasonYear} complete!`)
+
+        // Small delay between seasons to avoid rate limiting
+        if (seasonYear !== SEASONS_TO_IMPORT[SEASONS_TO_IMPORT.length - 1]) {
+          console.log('⏳ Waiting 2 seconds before next season...')
+          await new Promise((resolve) => setTimeout(resolve, 2000))
+        }
       } catch (error) {
-        console.error(`⚠️  Failed to import ${player.name}:`, error);
-        skippedCount++;
+        console.error(`❌ Failed to import season ${seasonYear}:`, error)
+        console.log(`   Continuing with next season...\n`)
       }
     }
 
-    console.log(`\n📊 Import complete:`);
-    console.log(`   ✅ Created/Updated: ${createdCount}`);
-    console.log(`   ⚠️  Skipped: ${skippedCount}`);
-    console.log(`   📈 Total in database: ${createdCount - skippedCount} players\n`);
+    // Display summary
+    console.log('\n' + '='.repeat(60))
+    console.log('📊 CUMULATIVE ARCHIVE SUMMARY')
+    console.log('='.repeat(60) + '\n')
 
-    // Verify import
-    const totalPlayers = await prisma.player.count({
-      where: { seasonYear: 2025 },
-    });
+    for (const [season, result] of Object.entries(seasonResults)) {
+      console.log(`${season}: ${result.count} players`)
+      console.log(`   🏆 Top: ${result.topPlayer}`)
+    }
 
-    console.log(`✅ Verified: ${totalPlayers} players in database (2025 season)\n`);
+    console.log(`\n📈 Total players imported: ${totalImported}`)
 
-    // Show top 10 HR leaders
-    const topPlayers = await prisma.player.findMany({
-      where: { seasonYear: 2025 },
-      orderBy: { hrsPreviousSeason: 'desc' },
-      take: 10,
-    });
+    // Get unique players across all seasons
+    const uniquePlayers = await db.player.findMany({})
+    console.log(`👥 Unique players in archive: ${uniquePlayers.length}`)
 
-    console.log('🏆 Top 10 HR Leaders (2024 stats for 2025 season):');
-    topPlayers.forEach((p, i) => {
-      console.log(`   ${i + 1}. ${p.name} (${p.teamAbbr}) - ${p.hrsPreviousSeason} HRs`);
-    });
+    // Get statistics from PlayerSeasonStats
+    const stats = await db.playerSeasonStats.aggregate({
+      _count: true,
+      _avg: { hrsTotal: true },
+      _max: { hrsTotal: true },
+      _min: { hrsTotal: true },
+    })
 
-    console.log('\n🎉 Player import successful!\n');
+    console.log('\n📊 Archive Statistics:')
+    console.log(`   Total season records: ${stats._count}`)
+    console.log(`   Average HRs: ${stats._avg.hrsTotal?.toFixed(1)}`)
+    console.log(`   Max HRs: ${stats._max.hrsTotal}`)
+    console.log(`   Min HRs: ${stats._min.hrsTotal}`)
 
+    // Show top 10 all-time HR leaders across all seasons
+    console.log('\n🏆 Top 10 Single-Season Performances (All Seasons):')
+    const allTimeLeaders = await db.playerSeasonStats.findMany(
+      {},
+      {
+        orderBy: { hrsTotal: 'desc' },
+        take: 10,
+      }
+    )
+
+    allTimeLeaders.forEach((stat, i) => {
+      console.log(
+        `   ${i + 1}. ${stat.player.name} (${stat.teamAbbr}) - ${stat.hrsTotal} HRs [${stat.seasonYear}]`
+      )
+    })
+
+    // Show players available for 2026 contest (2025 season stats)
+    const eligible2026 = await db.playerSeasonStats.getEligibleForContest(2026)
+    console.log(`\n🎮 Players eligible for 2026 contest: ${eligible2026.length}`)
+    console.log(`   (Based on 2025 season performance with ≥10 HRs)`)
+
+    console.log('\n' + '='.repeat(60))
+    console.log('✅ CUMULATIVE ARCHIVE IMPORT COMPLETE!')
+    console.log('='.repeat(60) + '\n')
+
+    console.log('💡 Next steps:')
+    console.log('   1. Start the backend: npm run dev')
+    console.log('   2. Verify data: GET /api/players?seasonYear=2025')
+    console.log('   3. Check all seasons: GET /api/players (no filter)\n')
   } catch (error) {
-    console.error('\n❌ Import failed:', error);
-    process.exit(1);
+    console.error('\n❌ Import failed:', error)
+    process.exit(1)
   } finally {
-    await prisma.$disconnect();
+    await db.$disconnect()
   }
 }
 
-importPlayers();
+// Run the import
+importCumulativePlayerArchive()

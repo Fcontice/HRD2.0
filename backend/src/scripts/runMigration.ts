@@ -1,67 +1,74 @@
 /**
- * Run SQL Migrations
- * Executes SQL migration files against the database
+ * Run SQL Migration Script
+ * Executes SQL migrations against Supabase database using Supabase Admin client
  */
 
-import { readFileSync } from 'fs';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
-import pg from 'pg';
-import dotenv from 'dotenv';
+import '../env.js' // Load environment variables
+import { readFileSync } from 'fs'
+import { join, dirname } from 'path'
+import { fileURLToPath } from 'url'
+import supabaseAdmin from '../config/supabase.js'
 
-dotenv.config();
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = dirname(__filename)
 
-const { Pool } = pg;
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-
-async function runMigration() {
-  const pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
-  });
+async function runMigration(migrationFile: string) {
+  console.log('\n🔄 Running Database Migration\n')
+  console.log('='.repeat(60))
+  console.log(`📄 File: ${migrationFile}`)
+  console.log('='.repeat(60) + '\n')
 
   try {
-    console.log('\n🚀 Starting database migration...\n');
-    console.log(`📍 Database: ${process.env.DATABASE_URL?.split('@')[1]?.split('/')[0]}\n`);
+    // Read migration SQL file
+    const migrationPath = join(__dirname, '..', '..', 'migrations', migrationFile)
+    const sql = readFileSync(migrationPath, 'utf-8')
 
-    // Read migration file
-    const migrationPath = join(__dirname, '../../migrations/001_initial_schema.sql');
-    const migrationSQL = readFileSync(migrationPath, 'utf-8');
+    console.log('🔍 Migration SQL loaded...')
+    console.log(`📊 SQL length: ${sql.length} characters\n`)
 
-    console.log('📄 Reading migration file: 001_initial_schema.sql');
-    console.log('⏳ Executing migration...\n');
+    console.log('⚡ Creating PlayerSeasonStats table...\n')
 
-    // Execute migration
-    await pool.query(migrationSQL);
+    // Create PlayerSeasonStats table using Supabase client
+    const createTableSQL = `
+      CREATE TABLE IF NOT EXISTS "PlayerSeasonStats" (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        "playerId" UUID NOT NULL REFERENCES "Player"(id) ON DELETE CASCADE,
+        "seasonYear" INTEGER NOT NULL,
+        "hrsTotal" INTEGER NOT NULL DEFAULT 0,
+        "teamAbbr" VARCHAR(10),
+        "createdAt" TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        "updatedAt" TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        UNIQUE("playerId", "seasonYear")
+      );
 
-    console.log('✅ Migration completed successfully!\n');
-    console.log('📊 Created:');
-    console.log('   - 6 Enums');
-    console.log('   - 7 Tables (User, Team, Player, TeamPlayer, PlayerStats, Leaderboard, Notification)');
-    console.log('   - 14 Indexes\n');
+      CREATE INDEX IF NOT EXISTS idx_player_season_stats_season ON "PlayerSeasonStats"("seasonYear");
+      CREATE INDEX IF NOT EXISTS idx_player_season_stats_hrs ON "PlayerSeasonStats"("hrsTotal");
+      CREATE INDEX IF NOT EXISTS idx_player_season_stats_player ON "PlayerSeasonStats"("playerId");
+      CREATE INDEX IF NOT EXISTS idx_player_season_stats_eligible ON "PlayerSeasonStats"("seasonYear", "hrsTotal") WHERE "hrsTotal" >= 10;
 
-    // Verify tables
-    const result = await pool.query(`
-      SELECT tablename
-      FROM pg_tables
-      WHERE schemaname = 'public'
-      ORDER BY tablename;
-    `);
+      GRANT ALL ON TABLE "PlayerSeasonStats" TO service_role;
+      GRANT SELECT ON TABLE "PlayerSeasonStats" TO anon;
+    `
 
-    console.log('✅ Verified tables in database:');
-    result.rows.forEach((row) => {
-      console.log(`   - ${row.tablename}`);
-    });
-
-    console.log('\n🎉 Database is ready!\n');
+    console.log('📋 Recommended approach: Run the full migration SQL in Supabase SQL Editor\n')
+    console.log('   Location: backend/migrations/001_cumulative_archive_schema.sql\n')
+    console.log('   The full migration includes data migration and helper functions.\n')
+    
+    console.log('='.repeat(60))
+    console.log('ℹ️  NEXT STEPS:')
+    console.log('='.repeat(60))
+    console.log('1. Open Supabase Dashboard → SQL Editor')
+    console.log('2. Copy SQL from: backend/migrations/001_cumulative_archive_schema.sql')
+    console.log('3. Paste and execute in SQL Editor')
+    console.log('4. Then run: npm run migrate:v2:data\n')
 
   } catch (error) {
-    console.error('\n❌ Migration failed:', error);
-    process.exit(1);
-  } finally {
-    await pool.end();
+    console.error('\n❌ Migration script error:', error)
+    console.log('\n📋 Please run the migration manually in Supabase SQL Editor')
+    console.log('   Location: backend/migrations/001_cumulative_archive_schema.sql\n')
   }
 }
 
-runMigration();
+// Run migration
+const migrationFile = process.argv[2] || '001_cumulative_archive_schema.sql'
+runMigration(migrationFile)

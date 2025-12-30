@@ -22,7 +22,7 @@ A web-based sports pooling application where users create fantasy teams of MLB p
 - **Runtime**: Node.js 20 LTS
 - **Framework**: Express 4.19
 - **Language**: TypeScript 5.3
-- **ORM**: Prisma 5.x
+- **ORM**: Supabase JS Client
 - **Authentication**: Passport.js (Local + Google OAuth) + JWT
 - **Password Hashing**: bcrypt
 - **Job Queue**: BullMQ

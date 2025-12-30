@@ -12,6 +12,8 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio",
     "prisma:push": "prisma db push",
+    "migrate:v2:sql": "tsx src/scripts/runMigration.ts",
+    "migrate:v2:data": "tsx src/scripts/importPlayers.ts",
     "seed:players": "tsx src/scripts/seedPlayers.ts",
     "import:players": "tsx src/scripts/importPlayers.ts",
     "import:2025": "tsx src/scripts/import2025Season.ts",

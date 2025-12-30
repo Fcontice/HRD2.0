@@ -22,7 +22,11 @@
       "Bash(node check-tables.js:*)",
       "Bash(node test-pooler-type.js:*)",
       "Bash(del test-prisma-connection.js check-tables.js test-pooler-type.js)",
-      "Bash(node test-db-connection.js:*)"
+      "Bash(node test-db-connection.js:*)",
+      "Bash(node test-scraper.js:*)",
+      "Bash(cat:*)",
+      "Bash(timeout 5 bash:*)",
+      "Bash(node verify-email.js:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

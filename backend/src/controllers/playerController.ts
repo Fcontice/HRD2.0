@@ -35,49 +35,61 @@ export async function getPlayers(req: Request, res: Response, next: NextFunction
       offset = '0',
     } = req.query;
 
-    // Build where clause
+    // Build where clause for PlayerSeasonStats
     const where: any = {
       seasonYear: parseInt(seasonYear as string),
-      isEligible: true,
-      hrsPreviousSeason: {
+      hrsTotal: {
         gte: parseInt(minHrs as string),
       },
     };
 
     if (maxHrs) {
-      where.hrsPreviousSeason.lte = parseInt(maxHrs as string);
+      where.hrsTotal.lte = parseInt(maxHrs as string);
     }
 
     if (team) {
       where.teamAbbr = (team as string).toUpperCase();
     }
 
-    if (search) {
-      where.name = {
-        contains: search as string,
-        mode: 'insensitive',
-      };
-    }
-
     // Build orderBy clause
     let orderBy: any = {};
     if (sortBy === 'name') {
-      orderBy = { name: sortOrder };
+      orderBy = { player: { name: sortOrder } };
     } else if (sortBy === 'team') {
       orderBy = { teamAbbr: sortOrder };
     } else {
-      orderBy = { hrsPreviousSeason: sortOrder };
+      orderBy = { hrsTotal: sortOrder };
     }
 
-    // Fetch players
-    const [players, totalCount] = await Promise.all([
-      db.player.findMany(where, {
-        orderBy,
-        take: parseInt(limit as string),
-        skip: parseInt(offset as string),
-      }),
-      db.player.count(where),
-    ]);
+    // Fetch player season stats
+    let playerSeasonStats = await db.playerSeasonStats.findMany(where, {
+      orderBy,
+      take: parseInt(limit as string),
+      skip: parseInt(offset as string),
+    });
+
+    // Apply name search filter if provided (post-query since we need to search on joined player)
+    if (search) {
+      const searchLower = (search as string).toLowerCase();
+      playerSeasonStats = playerSeasonStats.filter((stat: any) =>
+        stat.player?.name?.toLowerCase().includes(searchLower)
+      );
+    }
+
+    const totalCount = await db.playerSeasonStats.count(where);
+
+    // Transform data to match expected response format
+    const players = playerSeasonStats.map((stat: any) => ({
+      id: stat.player?.id,
+      mlbId: stat.player?.mlbId,
+      name: stat.player?.name,
+      teamAbbr: stat.teamAbbr,
+      photoUrl: stat.player?.photoUrl,
+      seasonYear: stat.seasonYear,
+      hrsTotal: stat.hrsTotal,
+      createdAt: stat.createdAt,
+      updatedAt: stat.updatedAt,
+    }));
 
     res.json({
       success: true,
@@ -98,7 +110,7 @@ export async function getPlayers(req: Request, res: Response, next: NextFunction
 
 /**
  * GET /api/players/:id
- * Get a single player by ID
+ * Get a single player by ID with season history
  */
 export async function getPlayerById(req: Request, res: Response, next: NextFunction) {
   try {
@@ -113,9 +125,15 @@ export async function getPlayerById(req: Request, res: Response, next: NextFunct
       throw new NotFoundError('Player not found');
     }
 
+    // Get player's season history
+    const seasonHistory = await db.playerSeasonStats.findByPlayer(id);
+
     res.json({
       success: true,
-      data: player,
+      data: {
+        ...player,
+        seasonHistory,
+      },
     });
   } catch (error) {
     next(error);
@@ -138,21 +156,34 @@ export async function searchPlayers(req: Request, res: Response, next: NextFunct
       throw new ValidationError('Search query (q) is required');
     }
 
-    const players = await db.player.findMany(
+    // Get player season stats for the specified year
+    let playerSeasonStats = await db.playerSeasonStats.findMany(
       {
         seasonYear: parseInt(seasonYear as string),
-        isEligible: true,
-        name: {
-          contains: q as string,
-        },
+        hrsTotal: { gte: 10 },
       },
       {
-        orderBy: {
-          hrsPreviousSeason: 'desc',
-        },
-        take: parseInt(limit as string),
+        orderBy: { hrsTotal: 'desc' },
+        take: parseInt(limit as string) * 3, // Get more to filter by name
       }
     );
+
+    // Filter by player name (post-query since we need to search on joined player)
+    const searchLower = (q as string).toLowerCase();
+    const filteredStats = playerSeasonStats
+      .filter((stat: any) => stat.player?.name?.toLowerCase().includes(searchLower))
+      .slice(0, parseInt(limit as string));
+
+    // Transform to expected format
+    const players = filteredStats.map((stat: any) => ({
+      id: stat.player?.id,
+      mlbId: stat.player?.mlbId,
+      name: stat.player?.name,
+      teamAbbr: stat.teamAbbr,
+      photoUrl: stat.player?.photoUrl,
+      seasonYear: stat.seasonYear,
+      hrsTotal: stat.hrsTotal,
+    }));
 
     res.json({
       success: true,
@@ -173,29 +204,29 @@ export async function getPlayerStats(req: Request, res: Response, next: NextFunc
   try {
     const { seasonYear = '2025' } = req.query;
 
-    const stats = await db.player.aggregate({
+    const stats = await db.playerSeasonStats.aggregate({
       where: {
         seasonYear: parseInt(seasonYear as string),
-        isEligible: true,
+        hrsTotal: { gte: 10 },
       },
       _count: true,
       _avg: {
-        hrsPreviousSeason: true,
+        hrsTotal: true,
       },
       _max: {
-        hrsPreviousSeason: true,
+        hrsTotal: true,
       },
       _min: {
-        hrsPreviousSeason: true,
+        hrsTotal: true,
       },
     });
 
     // Get team distribution
-    const teamDistribution = await db.player.groupBy({
+    const teamDistribution = await db.playerSeasonStats.groupBy({
       by: ['teamAbbr'],
       where: {
         seasonYear: parseInt(seasonYear as string),
-        isEligible: true,
+        hrsTotal: { gte: 10 },
       },
       _count: true,
       orderBy: {
@@ -209,9 +240,9 @@ export async function getPlayerStats(req: Request, res: Response, next: NextFunc
       success: true,
       data: {
         totalPlayers: stats._count,
-        averageHRs: Math.round((stats._avg.hrsPreviousSeason || 0) * 10) / 10,
-        maxHRs: stats._max.hrsPreviousSeason,
-        minHRs: stats._min.hrsPreviousSeason,
+        averageHRs: Math.round((stats._avg.hrsTotal || 0) * 10) / 10,
+        maxHRs: stats._max.hrsTotal,
+        minHRs: stats._min.hrsTotal,
         teamDistribution: teamDistribution.map((t: any) => ({
           team: t.teamAbbr,
           count: t._count,

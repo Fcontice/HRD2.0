@@ -50,9 +50,21 @@ export const userDb = {
   },
 
   async create(data: any) {
+    // Filter out null/undefined id to let database generate it
+    const { id, ...cleanData } = data
+
+    // Add timestamps
+    const now = new Date().toISOString()
+    const insertData = {
+      ...(id ? { id } : {}),
+      ...cleanData,
+      createdAt: cleanData.createdAt || now,
+      updatedAt: cleanData.updatedAt || now
+    }
+
     const { data: user, error } = await supabaseAdmin
       .from('User')
-      .insert(data)
+      .insert(insertData)
       .select()
       .single()
 
@@ -61,9 +73,15 @@ export const userDb = {
   },
 
   async update(where: { id: string }, data: any) {
+    // Add updatedAt timestamp
+    const updateData = {
+      ...data,
+      updatedAt: new Date().toISOString()
+    }
+
     const { data: user, error } = await supabaseAdmin
       .from('User')
-      .update(data)
+      .update(updateData)
       .eq('id', where.id)
       .select()
       .single()
@@ -152,9 +170,21 @@ export const playerDb = {
   },
 
   async create(data: any) {
+    // Filter out null/undefined id to let database generate it
+    const { id, ...cleanData } = data
+
+    // Add timestamps
+    const now = new Date().toISOString()
+    const insertData = {
+      ...(id ? { id } : {}),
+      ...cleanData,
+      createdAt: cleanData.createdAt || now,
+      updatedAt: cleanData.updatedAt || now
+    }
+
     const { data: player, error } = await supabaseAdmin
       .from('Player')
-      .insert(data)
+      .insert(insertData)
       .select()
       .single()
 
@@ -174,9 +204,15 @@ export const playerDb = {
   },
 
   async update(where: { id: string }, data: any) {
+    // Add updatedAt timestamp
+    const updateData = {
+      ...data,
+      updatedAt: new Date().toISOString()
+    }
+
     const { data: player, error } = await supabaseAdmin
       .from('Player')
-      .update(data)
+      .update(updateData)
       .eq('id', where.id)
       .select()
       .single()
@@ -410,12 +446,21 @@ export const teamDb = {
 
   async create(data: any) {
     // Separate teamPlayers from team data
-    const { teamPlayers, ...teamData } = data
+    const { teamPlayers, id, ...teamData } = data
+
+    // Add timestamps
+    const now = new Date().toISOString()
+    const insertData = {
+      ...(id ? { id } : {}),
+      ...teamData,
+      createdAt: teamData.createdAt || now,
+      updatedAt: teamData.updatedAt || now
+    }
 
     // Create team
     const { data: team, error: teamError } = await supabaseAdmin
       .from('Team')
-      .insert(teamData)
+      .insert(insertData)
       .select()
       .single()
 
@@ -423,10 +468,16 @@ export const teamDb = {
 
     // Create team players if provided
     if (teamPlayers?.create) {
-      const players = teamPlayers.create.map((tp: any) => ({
-        ...tp,
-        teamId: team.id
-      }))
+      const players = teamPlayers.create.map((tp: any) => {
+        const { id: tpId, ...tpData } = tp
+        const tpNow = new Date().toISOString()
+        return {
+          ...(tpId ? { id: tpId } : {}),
+          teamId: team.id,
+          ...tpData,
+          createdAt: tpData.createdAt || tpNow
+        }
+      })
 
       const { error: playersError } = await supabaseAdmin
         .from('TeamPlayer')
@@ -442,10 +493,16 @@ export const teamDb = {
   async update(where: { id: string }, data: any) {
     const { teamPlayers, ...teamData } = data
 
+    // Add updatedAt timestamp
+    const updateData = {
+      ...teamData,
+      updatedAt: new Date().toISOString()
+    }
+
     // Update team
     const { data: team, error: teamError } = await supabaseAdmin
       .from('Team')
-      .update(teamData)
+      .update(updateData)
       .eq('id', where.id)
       .select()
       .single()
@@ -464,9 +521,11 @@ export const teamDb = {
 
       // Create new players
       if (teamPlayers.create) {
+        const now = new Date().toISOString()
         const players = teamPlayers.create.map((tp: any) => ({
           ...tp,
-          teamId: where.id
+          teamId: where.id,
+          createdAt: tp.createdAt || now
         }))
 
         await supabaseAdmin
@@ -488,11 +547,259 @@ export const teamDb = {
   }
 }
 
+// ==================== PLAYER SEASON STATS OPERATIONS ====================
+
+export const playerSeasonStatsDb = {
+  async findMany(where: any = {}, options: any = {}) {
+    let query = supabaseAdmin.from('PlayerSeasonStats').select(`
+      *,
+      player:Player(
+        id,
+        name,
+        mlbId,
+        teamAbbr,
+        photoUrl
+      )
+    `)
+
+    // Apply filters
+    if (where.seasonYear !== undefined) {
+      query = query.eq('seasonYear', where.seasonYear)
+    }
+    if (where.playerId) {
+      query = query.eq('playerId', where.playerId)
+    }
+    if (where.hrsTotal?.gte) {
+      query = query.gte('hrsTotal', where.hrsTotal.gte)
+    }
+
+    // Apply ordering
+    if (options.orderBy) {
+      const field = Object.keys(options.orderBy)[0]
+      const direction = options.orderBy[field]
+      query = query.order(field, { ascending: direction === 'asc' })
+    }
+
+    // Apply pagination
+    if (options.take) query = query.limit(options.take)
+    if (options.skip) query = query.range(options.skip, options.skip + (options.take || 100) - 1)
+
+    const { data, error } = await query
+    if (error) throw error
+    return data || []
+  },
+
+  async findUnique(where: { playerId: string; seasonYear: number }) {
+    const { data, error } = await supabaseAdmin
+      .from('PlayerSeasonStats')
+      .select(`
+        *,
+        player:Player(*)
+      `)
+      .eq('playerId', where.playerId)
+      .eq('seasonYear', where.seasonYear)
+      .single()
+
+    if (error && error.code !== 'PGRST116') throw error
+    return data
+  },
+
+  async create(data: any) {
+    // Filter out null/undefined id to let database generate it
+    const { id, ...cleanData } = data
+
+    // Add timestamps
+    const now = new Date().toISOString()
+    const insertData = {
+      ...(id ? { id } : {}),
+      ...cleanData,
+      createdAt: cleanData.createdAt || now,
+      updatedAt: cleanData.updatedAt || now
+    }
+
+    const { data: stats, error } = await supabaseAdmin
+      .from('PlayerSeasonStats')
+      .insert(insertData)
+      .select()
+      .single()
+
+    if (error) throw error
+    return stats
+  },
+
+  async upsert(where: { playerId: string; seasonYear: number }, create: any, update: any) {
+    // Check if exists
+    const existing = await this.findUnique(where)
+
+    if (existing) {
+      return await this.update(where, update)
+    } else {
+      return await this.create({ ...where, ...create })
+    }
+  },
+
+  async update(where: { playerId: string; seasonYear: number }, data: any) {
+    // Add updatedAt timestamp
+    const updateData = {
+      ...data,
+      updatedAt: new Date().toISOString()
+    }
+
+    const { data: stats, error } = await supabaseAdmin
+      .from('PlayerSeasonStats')
+      .update(updateData)
+      .eq('playerId', where.playerId)
+      .eq('seasonYear', where.seasonYear)
+      .select()
+      .single()
+
+    if (error) throw error
+    return stats
+  },
+
+  // Get all seasons for one player (for comparison)
+  async findByPlayer(playerId: string) {
+    const { data, error } = await supabaseAdmin
+      .from('PlayerSeasonStats')
+      .select('*')
+      .eq('playerId', playerId)
+      .order('seasonYear', { ascending: false })
+
+    if (error) throw error
+    return data || []
+  },
+
+  // Get eligible players for a specific contest year
+  // e.g., getEligibleForContest(2026) returns 2025 players with ≥10 HRs
+  async getEligibleForContest(contestYear: number) {
+    const previousYear = contestYear - 1
+
+    const { data, error } = await supabaseAdmin
+      .from('PlayerSeasonStats')
+      .select(`
+        *,
+        player:Player(*)
+      `)
+      .eq('seasonYear', previousYear)
+      .gte('hrsTotal', 10)
+      .order('hrsTotal', { ascending: false })
+
+    if (error) throw error
+    return data || []
+  },
+
+  async count(where: any = {}) {
+    let query = supabaseAdmin
+      .from('PlayerSeasonStats')
+      .select('*', { count: 'exact', head: true })
+
+    if (where.seasonYear !== undefined) {
+      query = query.eq('seasonYear', where.seasonYear)
+    }
+
+    const { count, error } = await query
+
+    if (error) throw error
+    return count || 0
+  },
+
+  async aggregate(options: any) {
+    const { where = {}, _count, _avg, _max, _min } = options
+
+    let query = supabaseAdmin.from('PlayerSeasonStats').select('*')
+
+    if (where.seasonYear !== undefined) {
+      query = query.eq('seasonYear', where.seasonYear)
+    }
+
+    const { data, error } = await query
+
+    if (error) throw error
+
+    const result: any = {}
+
+    if (_count) {
+      result._count = data.length
+    }
+
+    if (_avg) {
+      result._avg = {}
+      Object.keys(_avg).forEach(field => {
+        const values = data.map(p => p[field]).filter(v => v != null)
+        result._avg[field] = values.length > 0 ? values.reduce((a, b) => a + b, 0) / values.length : null
+      })
+    }
+
+    if (_max) {
+      result._max = {}
+      Object.keys(_max).forEach(field => {
+        const values = data.map(p => p[field]).filter(v => v != null)
+        result._max[field] = values.length > 0 ? Math.max(...values) : null
+      })
+    }
+
+    if (_min) {
+      result._min = {}
+      Object.keys(_min).forEach(field => {
+        const values = data.map(p => p[field]).filter(v => v != null)
+        result._min[field] = values.length > 0 ? Math.min(...values) : null
+      })
+    }
+
+    return result
+  },
+
+  async groupBy(options: any) {
+    const { by, where = {}, _count, orderBy } = options
+
+    let query = supabaseAdmin.from('PlayerSeasonStats').select('*')
+
+    if (where.seasonYear !== undefined) {
+      query = query.eq('seasonYear', where.seasonYear)
+    }
+
+    const { data, error } = await query
+
+    if (error) throw error
+
+    // Group the data
+    const groups: any = {}
+    const groupByField = by[0] // Assuming single field grouping
+
+    data.forEach(item => {
+      const key = item[groupByField]
+      if (!groups[key]) {
+        groups[key] = { [groupByField]: key, _count: 0 }
+      }
+      groups[key]._count++
+    })
+
+    let result = Object.values(groups)
+
+    // Apply ordering if specified
+    if (orderBy && orderBy._count) {
+      const orderField = Object.keys(orderBy._count)[0]
+      const direction = orderBy._count[orderField]
+
+      result.sort((a: any, b: any) => {
+        if (direction === 'desc') {
+          return b._count - a._count
+        } else {
+          return a._count - b._count
+        }
+      })
+    }
+
+    return result
+  }
+}
+
 // Export a db object that mimics Prisma's structure
 export const db = {
   user: userDb,
   player: playerDb,
   team: teamDb,
+  playerSeasonStats: playerSeasonStatsDb,
 
   // Raw query support
   async $queryRaw(query: string, ...params: any[]) {

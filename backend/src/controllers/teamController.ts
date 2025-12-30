@@ -50,20 +50,27 @@ export async function createTeam(req: Request, res: Response, next: NextFunction
       throw new ValidationError('Team cannot have duplicate players');
     }
 
-    // Fetch all selected players
-    const players = await db.player.findMany({
-      id: { in: playerIds },
-      seasonYear,
-      isEligible: true,
+    // Fetch player season stats from previous year
+    // For a 2026 contest, we select based on 2025 season performance
+    const previousSeasonYear = seasonYear - 1;
+
+    const playerSeasonStats = await db.playerSeasonStats.findMany({
+      seasonYear: previousSeasonYear,
+      hrsTotal: { gte: 10 },
     });
 
+    // Filter to only the selected players
+    const selectedPlayerStats = playerSeasonStats.filter((stat: any) =>
+      playerIds.includes(stat.playerId)
+    );
+
     // Validate all players exist and are eligible
-    if (players.length !== 8) {
+    if (selectedPlayerStats.length !== 8) {
       throw new ValidationError('Some selected players are not eligible or do not exist');
     }
 
-    // Calculate total 2025 HRs
-    const totalHrs = players.reduce((sum, p) => sum + p.hrsPreviousSeason, 0);
+    // Calculate total HRs from previous season
+    const totalHrs = selectedPlayerStats.reduce((sum: number, stat: any) => sum + stat.hrsTotal, 0);
 
     // Validate HR limit (≤172)
     if (totalHrs > 172) {
@@ -216,19 +223,25 @@ export async function updateTeam(req: Request, res: Response, next: NextFunction
         throw new ValidationError('Team cannot have duplicate players');
       }
 
-      // Fetch new players
-      const players = await db.player.findMany({
-        id: { in: playerIds },
-        seasonYear: team.seasonYear,
-        isEligible: true,
+      // Fetch player season stats from previous year
+      const previousSeasonYear = team.seasonYear - 1;
+
+      const playerSeasonStats = await db.playerSeasonStats.findMany({
+        seasonYear: previousSeasonYear,
+        hrsTotal: { gte: 10 },
       });
 
-      if (players.length !== 8) {
+      // Filter to only the selected players
+      const selectedPlayerStats = playerSeasonStats.filter((stat: any) =>
+        playerIds.includes(stat.playerId)
+      );
+
+      if (selectedPlayerStats.length !== 8) {
         throw new ValidationError('Some selected players are not eligible or do not exist');
       }
 
-      // Calculate total HRs
-      const totalHrs = players.reduce((sum, p) => sum + p.hrsPreviousSeason, 0);
+      // Calculate total HRs from previous season
+      const totalHrs = selectedPlayerStats.reduce((sum: number, stat: any) => sum + stat.hrsTotal, 0);
 
       if (totalHrs > 172) {
         throw new ValidationError(
