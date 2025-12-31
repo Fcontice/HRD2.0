@@ -405,6 +405,7 @@ export const teamDb = {
         user:User(
           id,
           username,
+          email,
           avatarUrl
         ),
         teamPlayers:TeamPlayer(
@@ -428,6 +429,7 @@ export const teamDb = {
         user:User(
           id,
           username,
+          email,
           avatarUrl
         )
       `
@@ -794,11 +796,96 @@ export const playerSeasonStatsDb = {
   }
 }
 
+// ==================== TEAM PLAYER OPERATIONS ====================
+
+export const teamPlayerDb = {
+  async findMany(where: any = {}) {
+    let query = supabaseAdmin.from('TeamPlayer').select('*')
+
+    // Apply filters
+    Object.entries(where).forEach(([key, value]) => {
+      if (value !== undefined && value !== null) {
+        query = query.eq(key, value)
+      }
+    })
+
+    const { data, error } = await query
+
+    if (error) throw error
+    return data || []
+  },
+
+  async findUnique(where: { id: string }) {
+    const { data, error } = await supabaseAdmin
+      .from('TeamPlayer')
+      .select('*')
+      .eq('id', where.id)
+      .single()
+
+    if (error && error.code !== 'PGRST116') throw error
+    return data
+  },
+
+  async create(data: any) {
+    // Filter out null/undefined id to let database generate it
+    const { id, ...cleanData } = data
+
+    // Add timestamps
+    const now = new Date().toISOString()
+    const insertData = {
+      ...(id ? { id } : {}),
+      ...cleanData,
+      createdAt: cleanData.createdAt || now
+    }
+
+    const { data: teamPlayer, error } = await supabaseAdmin
+      .from('TeamPlayer')
+      .insert(insertData)
+      .select()
+      .single()
+
+    if (error) throw error
+    return teamPlayer
+  },
+
+  async delete(where: { id: string } | { teamId: string }) {
+    let query = supabaseAdmin.from('TeamPlayer').delete()
+
+    if ('id' in where) {
+      query = query.eq('id', where.id)
+    } else if ('teamId' in where) {
+      query = query.eq('teamId', where.teamId)
+    }
+
+    const { error } = await query
+
+    if (error) throw error
+  },
+
+  async count(where: any = {}) {
+    let query = supabaseAdmin
+      .from('TeamPlayer')
+      .select('*', { count: 'exact', head: true })
+
+    Object.entries(where).forEach(([key, value]) => {
+      if (value !== undefined) {
+        query = query.eq(key, value)
+      }
+    })
+
+    const { count, error } = await query
+
+    if (error) throw error
+    return count || 0
+  }
+}
+
 // Export a db object that mimics Prisma's structure
 export const db = {
   user: userDb,
   player: playerDb,
   team: teamDb,
+  teamPlayer: teamPlayerDb,
   playerSeasonStats: playerSeasonStatsDb,
 
   // Raw query support

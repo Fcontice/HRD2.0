@@ -28,7 +28,13 @@
       "Bash(timeout 5 bash:*)",
       "Bash(node verify-email.js:*)",
       "Bash(netstat:*)",
-      "Bash(findstr:*)"
+      "Bash(findstr:*)",
+      "mcp__plugin_compound-engineering_pw__browser_navigate",
+      "mcp__plugin_compound-engineering_pw__browser_console_messages",
+      "mcp__plugin_compound-engineering_pw__browser_snapshot",
+      "mcp__plugin_compound-engineering_pw__browser_click",
+      "mcp__plugin_compound-engineering_pw__browser_type",
+      "Skill(compound-engineering:frontend-design)"
     ]
   },
   "enableAllProjectMcpServers": true,

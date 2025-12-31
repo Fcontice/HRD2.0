@@ -5,7 +5,7 @@
 import { Router } from 'express';
 import { createCheckout, handleWebhook } from '../controllers/paymentController.js';
 import { requireAuth } from '../middleware/auth.js';
-import { asyncHandler } from '../utils/errors.js';
+import { asyncHandler } from '../middleware/errorHandler.js';
 import { checkoutRateLimiter, webhookRateLimiter } from '../middleware/paymentRateLimits.js';
 
 const router = Router();
